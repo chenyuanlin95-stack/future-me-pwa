@@ -32,6 +32,8 @@ npm start
 
 状态使用 `userId/apps/future-me/latest.json` 保存，并每天最多生成一个带时间的历史快照。每份状态包含 `schemaVersion` 和 `_updatedAt`，启动时会比较本机与云端更新时间；代码更新继续沿用同一份 IndexedDB，并通过 `migrateState()` 迁移旧结构。
 
+本机还带有自动更新保护。`storage.js` 的 `DATA_BUILD` 发生变化时，启动过程会先把升级前状态放进 IndexedDB 的 `snapshots` store，再执行迁移，只保留最近 5 份状态快照。媒体 Blob 不因代码升级移动或重命名；启动时会核对所有媒体索引，找不到文件时只记录异常，不会删除照片记录或训练历史。涉及数据结构的大改应同时升级 `DATA_BUILD` 和 `model.js` 的 `version`，并在 `migrateState()` 中添加兼容迁移。
+
 Supabase 配置和登录 session 仅保存在当前浏览器；密码只用于登录请求，不会由 App 保存。云端 bucket 是 private，文件读取需要当前用户的 JWT，RLS 还会核对文件路径第一段必须等于该用户 ID。用户名和密码无法恢复被系统清除的本机媒体，因此换手机或清除网站数据前仍应导出完整备份。
 
 ## 已实现
