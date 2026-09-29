@@ -2,6 +2,10 @@
 
 个人使用、mobile-first 的训练养成 Web App。沿用 `kit.html` 的纯 HTML/CSS/JavaScript 结构与颜色；本地可完全离线使用，也可连接 Supabase 私有云备份。
 
+正式 PWA：<https://chenyuanlin95-stack.github.io/future-me-pwa/>
+
+私有源码仓库保留完整开发历史；公开的 `future-me-pwa` 仓库只用于 GitHub Pages 静态部署。发布新版时同一个提交需要同步推送到 `origin/main` 和 `pages/main`，正式网址保持不变，本机 IndexedDB不会因部署更新而更换 origin。
+
 ## 本地启动
 
 需要 Node.js 20 或更新版本。在本目录运行：
