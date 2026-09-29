@@ -1,6 +1,6 @@
 # Future Me · 21 天变更好
 
-个人使用、mobile-first 的训练养成 Web App。沿用 `kit.html` 的纯 HTML/CSS/JavaScript 结构与颜色；无账户、无后端、无第三方运行时依赖。
+个人使用、mobile-first 的训练养成 Web App。沿用 `kit.html` 的纯 HTML/CSS/JavaScript 结构与颜色；本地可完全离线使用，也可连接 Supabase 私有云备份。
 
 ## 本地启动
 
@@ -19,6 +19,18 @@ npm start
 拍摄入口使用手机浏览器的文件相机选择器（`accept` + `capture`），并提供独立相册入口。实际调用方式依手机系统与浏览器而定，桌面模拟无法替代真机相机验证。需要长期使用时建议部署到固定 HTTPS 地址；当前 GitHub 私人仓库是源码存储，并不是已发布的网页。
 
 数据按「设备 + 浏览器 + 网站地址」隔离。状态、照片、缩略图和上传的视频都保存在 IndexedDB，并主动申请持久存储。浏览器更新通常不会删除，但清除网站数据、换网址或换设备会。请在「我的 → 设置 → 下载完整备份」定期保存 JSON 备份；该备份包含私人照片和视频，请妥善保管。恢复入口在同一位置。
+
+## Supabase 私有云备份
+
+云端采用“本地优先、手动同步”：日常操作先原子写入 IndexedDB；需要备份时在设置页点击上传。断网不会影响训练和拍照，也不会在两个设备间静默覆盖数据。
+
+1. 新建 Supabase 项目，在 Authentication 中创建自己的用户。建议关闭公开注册，只保留这个账号。
+2. 在 SQL Editor 运行 [`supabase-setup.sql`](./supabase-setup.sql)。它会建立私有 bucket，并限制每个登录用户只能访问以自己 `auth.uid()` 开头的目录。
+3. 在 Project Settings / API 中复制 Project URL 和 Publishable key（旧项目可能显示 anon key）。不要把 `service_role` key 填进浏览器。
+4. App 中进入「我的 → 设置 → 私有云备份」，填写 URL、key、账号邮箱和密码并登录。
+5. 点击“上传本机数据到云端”。换设备后先登录，再点击“从云端恢复到本机”。恢复会覆盖该浏览器现有数据，所以操作前建议先下载 JSON 备份。
+
+Supabase 配置和登录 session 仅保存在当前浏览器；密码只用于登录请求，不会由 App 保存。云端 bucket 是 private，文件读取需要当前用户的 JWT，RLS 还会核对文件路径第一段必须等于该用户 ID。
 
 ## 已实现
 
@@ -62,6 +74,8 @@ npm start
 - `index.html`：入口；`base.css`：继承原 HTML 的样式；`styles.css`：手机布局与参考图风格。
 - `app.js`：四页和交互；`model.js`：训练、奖励、抽猫、休息/断训逻辑。
 - `storage.js`：IndexedDB 数据访问边界，后续接 Supabase 可替换这一层。
+- `cloud.js`：Supabase Auth 与私有 Storage 手动上传/恢复；不包含管理权限密钥。
+- `supabase-setup.sql`：私有 bucket 与用户目录 RLS 策略。
 - `config.js`：每日任务、问题、数值与素材裁切坐标。
 - `assets/art-sheet.png`：用户提供的素材总览图；当前通过 CSS 定位显示局部。正式独立 PNG 到位后可替换 `art()`。
 

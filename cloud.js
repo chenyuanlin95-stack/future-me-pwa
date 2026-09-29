@@ -1,0 +1,19 @@
+const CONFIG_KEY='future-me-supabase-config',SESSION_KEY='future-me-supabase-session';
+const cleanUrl=url=>String(url||'').trim().replace(/\/$/,'');
+export function cloudConfig(){try{return JSON.parse(localStorage.getItem(CONFIG_KEY))||{}}catch{return {}}}
+export function saveCloudConfig(config){const next={url:cleanUrl(config.url),key:String(config.key||'').trim(),bucket:String(config.bucket||'future-me-private').trim()};localStorage.setItem(CONFIG_KEY,JSON.stringify(next));return next}
+export function clearCloudConfig(){localStorage.removeItem(CONFIG_KEY);localStorage.removeItem(SESSION_KEY)}
+const session=()=>{try{return JSON.parse(localStorage.getItem(SESSION_KEY))}catch{return null}};
+const saveSession=s=>localStorage.setItem(SESSION_KEY,JSON.stringify(s));
+const headers=(cfg,token,type)=>({apikey:cfg.key,Authorization:`Bearer ${token}`,...(type?{'Content-Type':type}:{})});
+async function json(res){const data=await res.json().catch(()=>({}));if(!res.ok)throw Error(data.msg||data.message||data.error_description||data.error||`云端请求失败（${res.status}）`);return data}
+async function refresh(cfg,s){if(!s?.refresh_token)throw Error('请先登录 Supabase。');const data=await json(await fetch(`${cfg.url}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{apikey:cfg.key,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:s.refresh_token})}));saveSession(data);return data}
+async function activeSession(){const cfg=cloudConfig();if(!cfg.url||!cfg.key)throw Error('请先填写 Supabase 项目地址和 Publishable/anon key。');let s=session();if(!s)throw Error('请先登录 Supabase。');if((s.expires_at||0)*1000<Date.now()+60000)s=await refresh(cfg,s);return {cfg,s,user:s.user}}
+export async function signIn(email,password){const cfg=cloudConfig();if(!cfg.url||!cfg.key)throw Error('请先保存 Supabase 项目配置。');const s=await json(await fetch(`${cfg.url}/auth/v1/token?grant_type=password`,{method:'POST',headers:{apikey:cfg.key,'Content-Type':'application/json'},body:JSON.stringify({email,password})}));saveSession(s);return s.user}
+export function signOut(){localStorage.removeItem(SESSION_KEY)}
+export function cloudStatus(){const cfg=cloudConfig(),s=session();return {configured:!!(cfg.url&&cfg.key),signedIn:!!s?.user,email:s?.user?.email||''}}
+const enc=s=>encodeURIComponent(String(s)).replace(/%2F/gi,'_');
+async function upload(cfg,token,bucket,path,body,type){const res=await fetch(`${cfg.url}/storage/v1/object/${encodeURIComponent(bucket)}/${path}`,{method:'POST',headers:{...headers(cfg,token,type),'x-upsert':'true'},body});if(!res.ok)await json(res)}
+async function download(cfg,token,bucket,path){const res=await fetch(`${cfg.url}/storage/v1/object/authenticated/${encodeURIComponent(bucket)}/${path}`,{headers:headers(cfg,token)});if(!res.ok)await json(res);return res.blob()}
+export async function pushCloud(state,media){const {cfg,s,user}=await activeSession(),root=user.id,manifest=[];for(const [key,blob] of media){const path=`${root}/media/${enc(key)}`;await upload(cfg,s.access_token,cfg.bucket,path,blob,blob.type||'application/octet-stream');manifest.push({key,path,type:blob.type,size:blob.size})}const snapshot={format:'future-me-cloud-v1',updatedAt:new Date().toISOString(),state,media:manifest};await upload(cfg,s.access_token,cfg.bucket,`${root}/snapshot.json`,JSON.stringify(snapshot),'application/json');return snapshot.updatedAt}
+export async function pullCloud(){const {cfg,s,user}=await activeSession(),root=user.id,blob=await download(cfg,s.access_token,cfg.bucket,`${root}/snapshot.json`),snapshot=JSON.parse(await blob.text());if(snapshot.format!=='future-me-cloud-v1'||!snapshot.state)throw Error('云端备份格式不正确。');const media=[];for(const item of snapshot.media||[])media.push([item.key,await download(cfg,s.access_token,cfg.bucket,item.path)]);return {state:snapshot.state,media,updatedAt:snapshot.updatedAt}}
