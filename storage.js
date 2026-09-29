@@ -1,15 +1,11 @@
-import {initialState} from './model.js';
-let db;
-export async function openStorage(){
-  db=await new Promise((resolve,reject)=>{const req=indexedDB.open('future-me-v1',1);req.onupgradeneeded=()=>{req.result.createObjectStore('state');req.result.createObjectStore('media');};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
-  return readState();
-}
-export function readState(){return new Promise((resolve,reject)=>{const r=db.transaction('state').objectStore('state').get('main');r.onsuccess=()=>resolve(r.result||initialState());r.onerror=()=>reject(r.error);});}
-// 所有状态和媒体写入同一事务。未来可在这里替换成 Supabase adapter。
-export function mutate(change,media){return new Promise((resolve,reject)=>{
-  const tx=db.transaction(['state','media'],'readwrite');let state,result,failed;
-  const r=tx.objectStore('state').get('main');
-  r.onsuccess=()=>{try{state=r.result||initialState();result=change(state);if(media)tx.objectStore('media').put(media.blob,media.key);tx.objectStore('state').put(state,'main');}catch(e){failed=e;tx.abort();}};
-  tx.oncomplete=()=>resolve({state,result});tx.onerror=()=>reject(failed||tx.error);tx.onabort=()=>reject(failed||tx.error||Error('保存失败，请重试。'));
-});}
-export function getMedia(key){return new Promise((resolve,reject)=>{const r=db.transaction('media').objectStore('media').get(key);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
+import {initialState,migrateState} from './model.js';
+let db;const result=req=>new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+export async function openStorage(){db=await new Promise((resolve,reject)=>{const req=indexedDB.open('future-me-v1',2);req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('state'))req.result.createObjectStore('state');if(!req.result.objectStoreNames.contains('media'))req.result.createObjectStore('media');};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});const raw=await readState(),state=migrateState(raw);if(raw?.version!==state.version)await replaceState(state);navigator.storage?.persist?.().catch(()=>{});return state;}
+export async function readState(){return (await result(db.transaction('state').objectStore('state').get('main')))||null;}
+export function replaceState(state){return result(db.transaction('state','readwrite').objectStore('state').put(state,'main'));}
+export function mutate(change,ops=[]){if(!Array.isArray(ops))ops=ops?[ops]:[];return new Promise((resolve,reject)=>{const tx=db.transaction(['state','media'],'readwrite');let state,out,failed,r=tx.objectStore('state').get('main');r.onsuccess=()=>{try{state=migrateState(r.result||initialState());out=change(state);const store=tx.objectStore('media');for(const op of ops)op.delete?store.delete(op.key):store.put(op.blob,op.key);tx.objectStore('state').put(state,'main');}catch(e){failed=e;tx.abort();}};tx.oncomplete=()=>resolve({state,result:out});tx.onerror=()=>reject(failed||tx.error);tx.onabort=()=>reject(failed||tx.error||Error('保存失败，请重试。'));});}
+export const getMedia=key=>result(db.transaction('media').objectStore('media').get(key));
+export async function clearAll(){await new Promise((resolve,reject)=>{const tx=db.transaction(['state','media'],'readwrite');tx.objectStore('state').clear();tx.objectStore('media').clear();tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});}
+const blobData=blob=>new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.readAsDataURL(blob);});
+export async function exportBackup(){const state=await readState(),store=db.transaction('media').objectStore('media'),keys=await result(store.getAllKeys()),media={};for(const key of keys)media[key]=await blobData(await getMedia(key));return new Blob([JSON.stringify({format:'future-me-backup-v1',exportedAt:new Date().toISOString(),state,media})],{type:'application/json'});}
+export async function importBackup(file){const p=JSON.parse(await file.text());if(p.format!=='future-me-backup-v1'||!p.state)throw Error('这不是有效的 Future Me 备份。');const decoded={};for(const [k,v] of Object.entries(p.media||{}))decoded[k]=await(await fetch(v)).blob();await new Promise((resolve,reject)=>{const tx=db.transaction(['state','media'],'readwrite'),ss=tx.objectStore('state'),ms=tx.objectStore('media');ss.clear();ms.clear();ss.put(migrateState(p.state),'main');for(const [k,b] of Object.entries(decoded))ms.put(b,k);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});return migrateState(await readState());}

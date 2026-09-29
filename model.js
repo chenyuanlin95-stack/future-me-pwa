@@ -1,55 +1,27 @@
-import { CONFIG, PLANS, CATS } from './config.js';
-export function dateKey(date = new Date()) { return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`; }
-export function plusDate(key,n) {const d=new Date(key+'T12:00:00'); d.setDate(d.getDate()+n);return dateKey(d);}
-export function initialState(today=dateKey()) {return {version:1,name:'邵邵',startDate:today,lastEvaluated:plusDate(today,-1),coins:0,records:{},cats:[],answers:{},restWeekdays:[...CONFIG.defaultRestWeekdays],restDates:[],pendingLoss:null};}
-export const completed = s => Object.values(s.records).filter(r=>r.completed);
-export const activeCats = s => s.cats.filter(c=>c.status==='home');
-export const isRest = (s,key) => s.restDates.includes(key)||s.restWeekdays.includes(new Date(key+'T12:00:00').getDay());
-export function current(s,today=dateKey()) {return s.records[today]||{date:today,day:Math.min(completed(s).length+1,CONFIG.totalDays),tasks:[],media:{},completed:false,reward:null};}
-export function ensureRecord(s,today=dateKey()) {return s.records[today] ||= current(s,today);}
-export function reconcile(s,today=dateKey(),random=Math.random) {
-  const yesterday=plusDate(today,-1); let missed=[];
-  if(s.lastEvaluated>=yesterday)return;
-  if(completed(s).length<CONFIG.totalDays) {
-    for(let key=plusDate(s.lastEvaluated,1);key<today;key=plusDate(key,1)) {
-      if(key>=s.startDate&&!isRest(s,key)&&!s.records[key]?.completed)missed.push(key);
-    }
-    const pool=activeCats(s);
-    // 一个连续离开期间只触发一次。先保存抽中的实例，揭晓时才切换状态。
-    if(missed.length&&pool.length&&!s.pendingLoss)s.pendingLoss={instanceId:pool[Math.floor(random()*pool.length)].instanceId,missed};
-  }
-  s.lastEvaluated=yesterday;
+import {CONFIG,PLANS,CATS,generateRewardPool} from './config.js';
+export function dateKey(date=new Date()){return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;}
+export function plusDate(key,n){const d=new Date(key+'T12:00:00');d.setDate(d.getDate()+n);return dateKey(d);}
+const defaultCats=()=>CATS.map(c=>({id:c.id,name:c.name,rarity:c.rarity,unlocked:false,status:'LOCKED',duplicateCount:0,obtainedAt:[]}));
+export function initialState(today=dateKey(),random=Math.random){return {version:3,chapterId:`chapter-${today}`,name:'邵邵',startDate:today,lastProcessedDate:plusDate(today,-1),trainingDay:1,trainingSchedule:{},completedTrainingDays:[],coins:0,dailyRewardPool:generateRewardPool(random),claimedRewards:{},records:{},cats:defaultCats(),pityCounter:0,leaveTickets:CONFIG.initialLeaveTickets,catRecallTickets:0,successfulTrainingStreak:0,missedTrainingDays:[],processedMissedTrainingDays:[],pendingCatDepartureEvents:[],pendingCatReturnEvents:[],questionUnlocks:[],answers:{},restWeekdays:[...CONFIG.defaultRestWeekdays],restDates:[],videoSources:{}};}
+export function migrateState(raw,today=dateKey()){
+ if(!raw)return initialState(today);if(raw.version>=3){raw.pendingCatDepartureEvents||=[];raw.pendingCatReturnEvents||=[];raw.videoSources||={};return raw;}
+ const s=initialState(raw.startDate||today);Object.assign(s,{name:raw.name||'邵邵',startDate:raw.startDate||today,coins:raw.coins||0,records:raw.records||{},answers:raw.answers||{},restWeekdays:raw.restWeekdays||[],restDates:raw.restDates||[]});
+ const done=Object.values(s.records).filter(r=>r.completed).sort((a,b)=>a.day-b.day);s.completedTrainingDays=done.map(r=>r.day);s.trainingDay=Math.min(21,done.length+1);s.questionUnlocks=[...s.completedTrainingDays];s.lastProcessedDate=raw.lastEvaluated||plusDate(today,-1);
+ for(const old of raw.cats||[]){const c=s.cats[old.catId];if(!c)continue;c.unlocked=true;c.status=old.status==='away'?'AWAY':'HOME';c.duplicateCount++;c.obtainedAt.push(old.obtainedAt||Date.now());}
+ for(const r of done)if(typeof r.reward==='number'){s.claimedRewards[r.day]=r.reward;s.dailyRewardPool[r.day-1]=r.reward;}
+ let diff=CONFIG.reward.total-s.dailyRewardPool.reduce((a,b)=>a+b,0);const free=s.dailyRewardPool.map((_,i)=>i).filter(i=>!s.claimedRewards[i+1]);for(const i of free){if(!diff)break;const d=Math.sign(diff)*Math.min(Math.abs(diff),diff>0?CONFIG.reward.max-s.dailyRewardPool[i]:s.dailyRewardPool[i]-CONFIG.reward.min);s.dailyRewardPool[i]+=d;diff-=d;}return s;
 }
-export function finishTask(s,id,today=dateKey()) {
-  const r=ensureRecord(s,today);
-  if(!r.media.front)throw Error('先完成今天的正面照打卡。');
-  if(completed(s).length>=21&&!r.completed)throw Error('21 个训练日已经完成啦。');
-  const plan=PLANS[r.day-1];
-  if(!plan.tasks.some(t=>t.id===id))throw Error('找不到这个任务。');
-  if(!r.tasks.includes(id))r.tasks.push(id);
-  r.completed=plan.tasks.every(t=>r.tasks.includes(t.id));
-  return r.completed;
-}
-export function claim(s,key,random=Math.random) {
-  const r=s.records[key]; if(!r?.completed||r.reward!==null) return null;
-  const amount=CONFIG.reward.min+Math.floor(random()*(CONFIG.reward.max-CONFIG.reward.min+1));
-  r.reward=amount;s.coins+=amount;return amount;
-}
-export function draw(s,count,random=Math.random) {
-  if(![1,10].includes(count))throw Error('请选择单抽或十连。');
-  const cost=count*CONFIG.draw.price;if(s.coins<cost)throw Error('金币还差一点，完成训练就能领取红包啦。');
-  s.coins-=cost;
-  return Array.from({length:count},()=>{
-    const roll=random(),w=CONFIG.draw.weights,total=w.R+w.S+w.SSR;
-    const rarity=roll<w.R/total?'R':roll<(w.R+w.S)/total?'S':'SSR';
-    const pool=CATS.filter(c=>c.rarity===rarity), cat=pool[Math.floor(random()*pool.length)];
-    const instanceId=globalThis.crypto?.randomUUID?.()||Array.from(globalThis.crypto.getRandomValues(new Uint32Array(4)),x=>x.toString(16)).join('-');
-    const instance={instanceId,catId:cat.id,status:'home',obtainedAt:Date.now()};s.cats.push(instance);return cat;
-  });
-}
-export function revealLoss(s) {
-  if(!s.pendingLoss)return null;
-  const cat=s.cats.find(c=>c.instanceId===s.pendingLoss.instanceId);
-  if(cat){cat.status='away';cat.leftAt=Date.now();}
-  s.pendingLoss=null;return cat ? CATS[cat.catId] : null;
-}
+export const completed=s=>Object.values(s.records).filter(r=>r.completed),activeCats=s=>s.cats.filter(c=>c.status==='HOME'),awayCats=s=>s.cats.filter(c=>c.status==='AWAY');
+export const isRest=(s,key)=>s.restDates.includes(key)||s.restWeekdays.includes(new Date(key+'T12:00:00').getDay());
+export const hasFront=r=>!!(r?.media?.front?.full||r?.media?.front);
+export function current(s,today=dateKey()){return s.records[today]||{date:today,day:s.trainingDay,tasks:[],media:{},completed:false,reward:null,leaveUsed:false,createdAt:Date.now()};}
+export function ensureRecord(s,today=dateKey()){const r=s.records[today]||=current(s,today);s.trainingSchedule[today]={scheduledTraining:!isRest(s,today),trainingDay:r.day};return r;}
+export function reconcile(s,today=dateKey(),random=Math.random){const yesterday=plusDate(today,-1);if(s.lastProcessedDate>=yesterday)return;for(let key=plusDate(s.lastProcessedDate,1);key<today;key=plusDate(key,1)){if(key<s.startDate||isRest(s,key)||s.completedTrainingDays.length>=21)continue;const r=s.records[key];if(r?.completed||r?.leaveUsed||s.processedMissedTrainingDays.includes(key))continue;s.missedTrainingDays.push(key);s.processedMissedTrainingDays.push(key);s.successfulTrainingStreak=0;const reserved=new Set(s.pendingCatDepartureEvents.map(e=>e.catId)),home=activeCats(s).filter(c=>!reserved.has(c.id));if(home.length)s.pendingCatDepartureEvents.push({date:key,catId:home[Math.floor(random()*home.length)].id});}s.lastProcessedDate=yesterday;}
+export function useLeave(s,today=dateKey()){if(isRest(s,today))throw Error('今天是计划休息日，不需要请假条。');const r=ensureRecord(s,today);if(r.completed)throw Error('今天的训练已经完成。');if(r.leaveUsed)return false;if(s.leaveTickets<1)throw Error('请假条已经用完了。');r.leaveUsed=true;s.leaveTickets--;return true;}
+function handleStreak(s,random=Math.random){s.successfulTrainingStreak++;if(s.successfulTrainingStreak<CONFIG.recallStreak)return null;s.successfulTrainingStreak=0;const away=awayCats(s);if(away.length){const cat=away[Math.floor(random()*away.length)];s.pendingCatReturnEvents.push({catId:cat.id});return {type:'return',cat};}s.catRecallTickets++;return {type:'ticket'};}
+export function finishTask(s,id,today=dateKey(),random=Math.random){const r=ensureRecord(s,today);if(r.leaveUsed)throw Error('今天已使用请假条，任务保留到下一个训练日。');if(!hasFront(r))throw Error('先完成今天的正面照打卡。');if(s.completedTrainingDays.length>=21&&!r.completed)throw Error('21 个训练日已经完成啦。');const plan=PLANS[r.day-1];if(!plan.tasks.some(t=>t.id===id))throw Error('找不到这个任务。');if(!r.tasks.includes(id))r.tasks.push(id);const was=r.completed;r.completed=plan.tasks.every(t=>r.tasks.includes(t.id));if(r.completed&&!was){s.completedTrainingDays.push(r.day);s.questionUnlocks.push(r.day);s.trainingDay=Math.min(21,r.day+1);return {completed:true,streak:handleStreak(s,random)};}return {completed:r.completed,streak:null};}
+export function claim(s,key){const r=s.records[key];if(!r?.completed||r.reward!==null)return null;const amount=s.dailyRewardPool[r.day-1];r.reward=amount;s.claimedRewards[r.day]=amount;s.coins+=amount;return amount;}
+export function draw(s,count,random=Math.random){if(![1,10].includes(count))throw Error('请选择单抽或十连。');const cost=count===10?CONFIG.draw.tenPrice:CONFIG.draw.singlePrice;if(s.coins<cost)throw Error('金币还差一点，完成训练就能领取红包啦。');s.coins-=cost;return Array.from({length:count},()=>{let rarity;if(s.pityCounter>=CONFIG.draw.pity-1)rarity='SSR';else{const roll=random(),w=CONFIG.draw.weights,total=w.R+w.S+w.SSR;rarity=roll<w.R/total?'R':roll<(w.R+w.S)/total?'S':'SSR';}s.pityCounter=rarity==='SSR'?0:s.pityCounter+1;const pool=CATS.filter(c=>c.rarity===rarity),base=pool[Math.floor(random()*pool.length)],cat=s.cats[base.id];cat.unlocked=true;if(cat.status==='LOCKED')cat.status='HOME';cat.duplicateCount++;cat.obtainedAt.push(Date.now());return {...base,duplicateCount:cat.duplicateCount};});}
+export function revealDeparture(s){const e=s.pendingCatDepartureEvents.shift();if(!e)return null;const cat=s.cats[e.catId];if(cat?.status==='HOME')cat.status='AWAY';return cat;}
+export function revealReturn(s){const e=s.pendingCatReturnEvents.shift();if(!e)return null;const cat=s.cats[e.catId];if(cat?.status==='AWAY')cat.status='HOME';return cat;}
+export function useRecall(s,catId){const cat=s.cats[catId];if(!cat||cat.status!=='AWAY')throw Error('这只猫猫已经在家。');if(s.catRecallTickets<1)throw Error('还没有猫猫召回券。');s.catRecallTickets--;cat.status='HOME';return cat;}
