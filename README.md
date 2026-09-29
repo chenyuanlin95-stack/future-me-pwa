@@ -22,15 +22,17 @@ npm start
 
 ## Supabase 私有云备份
 
-云端采用“本地优先、手动同步”：日常操作先原子写入 IndexedDB；需要备份时在设置页点击上传。断网不会影响训练和拍照，也不会在两个设备间静默覆盖数据。
+云端采用“本地优先、自动同步”：日常操作先原子写入 IndexedDB，登录后再延迟约 2.5 秒自动同步训练状态、金币、猫猫、回答、设置和媒体索引。断网不会影响训练和拍照；下次打开或再次修改时会继续尝试同步。照片和视频文件默认仍留在本机，不占用云端文件额度。
 
 1. 新建 Supabase 项目，在 Authentication 中创建自己的用户。建议关闭公开注册，只保留这个账号。
 2. 在 SQL Editor 运行 [`supabase-setup.sql`](./supabase-setup.sql)。它会建立私有 bucket，并限制每个登录用户只能访问以自己 `auth.uid()` 开头的目录。
 3. 在 Project Settings / API 中复制 Project URL 和 Publishable key（旧项目可能显示 anon key）。不要把 `service_role` key 填进浏览器。
 4. App 中进入「我的 → 设置 → 私有云备份」，填写 URL、key、账号邮箱和密码并登录。
-5. 点击“上传本机数据到云端”。换设备后先登录，再点击“从云端恢复到本机”。恢复会覆盖该浏览器现有数据，所以操作前建议先下载 JSON 备份。
+5. 登录后自动同步即开启。“立即同步状态”用于主动检查；“用云端状态恢复本机”只覆盖进度数据，不删除本机媒体文件。
 
-Supabase 配置和登录 session 仅保存在当前浏览器；密码只用于登录请求，不会由 App 保存。云端 bucket 是 private，文件读取需要当前用户的 JWT，RLS 还会核对文件路径第一段必须等于该用户 ID。
+状态使用 `userId/apps/future-me/latest.json` 保存，并每天最多生成一个带时间的历史快照。每份状态包含 `schemaVersion` 和 `_updatedAt`，启动时会比较本机与云端更新时间；代码更新继续沿用同一份 IndexedDB，并通过 `migrateState()` 迁移旧结构。
+
+Supabase 配置和登录 session 仅保存在当前浏览器；密码只用于登录请求，不会由 App 保存。云端 bucket 是 private，文件读取需要当前用户的 JWT，RLS 还会核对文件路径第一段必须等于该用户 ID。用户名和密码无法恢复被系统清除的本机媒体，因此换手机或清除网站数据前仍应导出完整备份。
 
 ## 已实现
 
